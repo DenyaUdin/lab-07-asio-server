@@ -1,7 +1,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/array.hpp>
-
+#include <stdlib.h>
 #include <memory>
 #include <thread>
 #include <chrono>
@@ -25,15 +25,13 @@ struct talk_to_client
 		timeout = false; 
 	}
 	
-	
 	ip::tcp::socket & sock() { return *sock_; } 
 	bool timed_out() const
 	{
 		return timeout;
 	}
-	void stop() 
+	void stop()
 	{
-		
 		sock_->shutdown(asio::socket_base::shutdown_send);
 		boost::system::error_code err; sock_->close(err);
 	}
@@ -64,19 +62,20 @@ struct talk_to_client
 			system_clock::time_point end = std::chrono::system_clock::now();   
 			if (std::chrono::duration_cast<std::chrono::milliseconds>(end - now).count() >= 5000) { 
 				
-				stop();
-				delete sock_;
 				timeout = true; 
 			}
-			return;
+			return; 
 		}
+	    
 		now = std::chrono::system_clock::now(); 
 		cout << "From client: " << buf.data(); 
+		if (buf[len - 1] != '\n') cout << endl;
+		
 		string strToClient="";
 		if (flagFirst) 
 		{
 			username_ = buf.data(); 
-			strToClient = "login_ok\n";  
+			strToClient = "login_ok\n"; 
 			flagFirst = false; 
 		}
 		else { 
@@ -85,7 +84,7 @@ struct talk_to_client
 			else
 				if (fromClient == "clients\n") 
 				{
-				
+			
 				for (auto pos : clients)
 					strToClient += pos->username_ + " ";
 				strToClient += "\n";
@@ -98,13 +97,24 @@ struct talk_to_client
 		writeToSocket(strToClient);  
 
 	}
+	virtual ~talk_to_client()
+	{
+		if (sock_ != nullptr)
+		{
+			stop();
+			delete sock_;
+		}
+		cout << "Destructor for client: " << username_ << endl;
+		
+	}
 	
 
 private:
 	
+	
 	ip::tcp::socket *sock_; 
 	bool timeout; 
-	std::string username_; 
+	std::string username_="noname"; 
 	system_clock::time_point now; 
 	
 
@@ -117,11 +127,15 @@ bool predicatTimeOut(talk_to_client *pCl)
 	return pCl->timed_out();
 }
 
-void accept_thread() { 
+bool flagServer=true; 
+talk_to_client* client;
+void accept_thread() {
 	asio::io_service ios;
+
+	cout << "Start server!" << endl;
 	ip::tcp::acceptor acceptor(ios, ip::tcp::endpoint(ip::tcp::v4(), 3333));
-	while (true) { 
-		talk_to_client * client = new talk_to_client(ios); 
+	while (flagServer) { 
+		client = new talk_to_client(ios); 
 		acceptor.accept(client->sock()); 
 		std::lock_guard <std::mutex> lock(mut);  
 		clients.push_back(client); 
@@ -129,22 +143,41 @@ void accept_thread() {
 }
 
 void handle_clients_thread() { 
-	while (true) 
+	while (flagServer) {
+	
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		std::lock_guard <std::mutex> lock(mut); 
 		for (auto& client : clients) { 
 			client->readToWrite(); 
 		}
-		auto posDel=std::remove_if(clients.begin(), clients.end(), predicatTimeOut); 
-		clients.erase(posDel, clients.end()); 
-		
+		auto pos = clients.begin();
+		while ((pos = find_if(pos, clients.end(), predicatTimeOut)) != clients.end())
+		{
+			delete (*pos); 
+			pos = clients.erase(pos); 
+		}	
 	}
+	for (auto& pos : clients)
+	{
+		delete pos; 
+	}
+	clients.clear(); 
 }
 int main(int argc, char* argv[])
 {
-
+	cout << "For start server press Enter" << endl;
+	cout << "For stop from server press Enter" << endl;
+	cout << "For restart server press Enter" << endl;
+	cin.get(); 
 	thread t1(accept_thread);
 	thread t2(handle_clients_thread);
-	t1.join();
+	cin.get(); 
+	flagServer = false;
 	t2.join();
+	cin.get(); 
+	flagServer = true;
+	thread t2_2(handle_clients_thread);
+	cout << "restart server" << endl;
+	cin.get(); 
+	std::system("pause");
 }
